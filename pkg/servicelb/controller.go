@@ -30,6 +30,7 @@ import (
 var (
 	svcNameLabel       = "svccontroller." + version.Program + ".cattle.io/svcname"
 	daemonsetNodeLabel = "svccontroller." + version.Program + ".cattle.io/enablelb"
+	daemonsetNodeLabelExtra = "svccontroller." + version.Program + ".cattle.io/service"
 	nodeSelectorLabel  = "svccontroller." + version.Program + ".cattle.io/nodeselector"
 	DefaultLBImage     = "rancher/klipper-lb:v0.2.0"
 )
@@ -151,7 +152,9 @@ func (h *handler) onChangeNode(key string, node *core.Node) (*core.Node, error) 
 	if _, ok := node.Labels[daemonsetNodeLabel]; !ok {
 		return node, nil
 	}
-
+	if _, ok := node.Labels[daemonsetNodeLabelExtra]; !ok {
+		return node, nil
+	}
 	if err := h.updateDaemonSets(); err != nil {
 		return node, err
 	}
@@ -409,7 +412,15 @@ func (h *handler) newDaemonSet(svc *core.Service) (*apps.DaemonSet, error) {
 	if err != nil {
 		return nil, err
 	}
+	selectorExtra, err := labels.Parse(daemonsetNodeLabelExtra)
+	if err != nil {
+		return nil, err
+	}
 	nodesWithLabel, err := h.nodeCache.List(selector)
+	if err != nil {
+		return nil, err
+	}
+	nodesWithLabelExtra, err := h.nodeCache.List(selectorExtra)
 	if err != nil {
 		return nil, err
 	}
@@ -417,8 +428,15 @@ func (h *handler) newDaemonSet(svc *core.Service) (*apps.DaemonSet, error) {
 		ds.Spec.Template.Spec.NodeSelector = map[string]string{
 			daemonsetNodeLabel: "true",
 		}
+		if len(nodesWithLabelExtra) > 0 {
+			ds.Spec.Template.Spec.NodeSelector = map[string]string{
+				daemonsetNodeLabelExtra: svc.Name,
+			}
+		}
 		ds.Labels[nodeSelectorLabel] = "true"
 	}
+
+
 	return ds, nil
 }
 

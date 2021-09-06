@@ -425,12 +425,14 @@ func (h *handler) newDaemonSet(svc *core.Service) (*apps.DaemonSet, error) {
 		return nil, err
 	}
 	if len(nodesWithLabel) > 0 {
-		ds.Spec.Template.Spec.NodeSelector = map[string]string{
-			daemonsetNodeLabel: "true",
-		}
 		if len(nodesWithLabelExtra) > 0 {
 			ds.Spec.Template.Spec.NodeSelector = map[string]string{
+				daemonsetNodeLabel: "true",
 				daemonsetNodeLabelExtra: svc.Name,
+			}
+		} else {
+			ds.Spec.Template.Spec.NodeSelector = map[string]string{
+				daemonsetNodeLabel: "true",
 			}
 		}
 		ds.Labels[nodeSelectorLabel] = "true"

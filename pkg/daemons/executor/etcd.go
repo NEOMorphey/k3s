@@ -1,8 +1,10 @@
+//go:build !no_embedded_executor
 // +build !no_embedded_executor
 
 package executor
 
 import (
+	"context"
 	"errors"
 	"io/ioutil"
 	"path/filepath"
@@ -17,8 +19,8 @@ func (e Embedded) CurrentETCDOptions() (InitialOptions, error) {
 	return InitialOptions{}, nil
 }
 
-func (e Embedded) ETCD(args ETCDConfig) error {
-	configFile, err := args.ToConfigFile()
+func (e Embedded) ETCD(ctx context.Context, args ETCDConfig, extraArgs []string) error {
+	configFile, err := args.ToConfigFile(extraArgs)
 	if err != nil {
 		return err
 	}
@@ -26,9 +28,10 @@ func (e Embedded) ETCD(args ETCDConfig) error {
 	if err != nil {
 		return err
 	}
+
 	etcd, err := embed.StartEtcd(cfg)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	go func() {
@@ -42,7 +45,9 @@ func (e Embedded) ETCD(args ETCDConfig) error {
 				logrus.Infof("this node has been removed from the cluster please restart %s to rejoin the cluster", version.Program)
 				return
 			}
-
+		case <-ctx.Done():
+			logrus.Infof("stopping etcd")
+			etcd.Close()
 		case <-etcd.Server.StopNotify():
 			logrus.Fatalf("etcd stopped")
 		case err := <-etcd.Err():

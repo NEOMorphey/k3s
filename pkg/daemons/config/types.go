@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/k3s-io/kine/pkg/endpoint"
 	"github.com/rancher/wrangler/pkg/generated/controllers/core"
@@ -30,7 +31,7 @@ type Node struct {
 	NoFlannel                bool
 	SELinux                  bool
 	FlannelBackend           string
-	FlannelConf              string
+	FlannelConfFile          string
 	FlannelConfOverride      bool
 	FlannelIface             *net.Interface
 	Containerd               Containerd
@@ -99,9 +100,32 @@ type Agent struct {
 	DisableNPC              bool
 	Rootless                bool
 	ProtectKernelDefaults   bool
+	DisableServiceLB        bool
+	EnableIPv6              bool
+}
+
+// CriticalControlArgs contains parameters that all control plane nodes in HA must share
+type CriticalControlArgs struct {
+	ClusterDNSs           []net.IP
+	ClusterIPRanges       []*net.IPNet
+	ClusterDNS            net.IP
+	ClusterDomain         string
+	ClusterIPRange        *net.IPNet
+	DisableCCM            bool
+	DisableHelmController bool
+	DisableKubeProxy      bool
+	DisableNPC            bool
+	Disables              map[string]bool
+	DisableServiceLB      bool
+	FlannelBackend        string
+	NoCoreDNS             bool
+	ServiceIPRange        *net.IPNet
+	ServiceIPRanges       []*net.IPNet
+	Skips                 map[string]bool
 }
 
 type Control struct {
+	CriticalControlArgs
 	AdvertisePort int
 	AdvertiseIP   string
 	// The port which kubectl clients can access k8s
@@ -113,43 +137,31 @@ type Control struct {
 	APIServerBindAddress     string
 	AgentToken               string `json:"-"`
 	Token                    string `json:"-"`
-	ClusterIPRange           *net.IPNet
-	ClusterIPRanges          []*net.IPNet
-	ServiceIPRange           *net.IPNet
-	ServiceIPRanges          []*net.IPNet
 	ServiceNodePortRange     *utilnet.PortRange
-	ClusterDNS               net.IP
-	ClusterDNSs              []net.IP
-	ClusterDomain            string
-	NoCoreDNS                bool
 	KubeConfigOutput         string
 	KubeConfigMode           string
 	DataDir                  string
-	Skips                    map[string]bool
-	Disables                 map[string]bool
 	Datastore                endpoint.Config
+	DisableAPIServer         bool
+	DisableControllerManager bool
+	DisableETCD              bool
+	DisableScheduler         bool
 	ExtraAPIArgs             []string
 	ExtraControllerArgs      []string
 	ExtraCloudControllerArgs []string
+	ExtraEtcdArgs            []string
 	ExtraSchedulerAPIArgs    []string
 	NoLeaderElect            bool
 	JoinURL                  string
-	FlannelBackend           string
 	IPSECPSK                 string
 	DefaultLocalStoragePath  string
 	SystemDefaultRegistry    string
-	DisableCCM               bool
-	DisableNPC               bool
-	DisableHelmController    bool
-	DisableKubeProxy         bool
-	DisableAPIServer         bool
-	DisableControllerManager bool
-	DisableScheduler         bool
-	DisableETCD              bool
 	ClusterInit              bool
 	ClusterReset             bool
 	ClusterResetRestorePath  string
 	EncryptSecrets           bool
+	EncryptForce             bool
+	EncryptSkip              bool
 	TLSMinVersion            uint16
 	TLSCipherSuites          []uint16
 	EtcdSnapshotName         string
@@ -167,6 +179,9 @@ type Control struct {
 	EtcdS3BucketName         string
 	EtcdS3Region             string
 	EtcdS3Folder             string
+	EtcdS3Timeout            time.Duration
+	EtcdS3Insecure           bool
+	ServerNodeName           string
 
 	BindAddress string
 	SANs        []string
@@ -189,15 +204,18 @@ type ControlRuntimeBootstrap struct {
 	RequestHeaderCAKey string
 	IPSECKey           string
 	EncryptionConfig   string
+	EncryptionHash     string
 }
 
 type ControlRuntime struct {
 	ControlRuntimeBootstrap
 
-	HTTPBootstrap          bool
-	APIServerReady         <-chan struct{}
-	ETCDReady              <-chan struct{}
-	ClusterControllerStart func(ctx context.Context) error
+	HTTPBootstrap                       bool
+	APIServerReady                      <-chan struct{}
+	AgentReady                          <-chan struct{}
+	ETCDReady                           <-chan struct{}
+	ClusterControllerStart              func(ctx context.Context) error
+	LeaderElectedClusterControllerStart func(ctx context.Context) error
 
 	ClientKubeAPICert string
 	ClientKubeAPIKey  string
@@ -214,6 +232,7 @@ type ControlRuntime struct {
 	ServingKubeletKey  string
 	ServerToken        string
 	AgentToken         string
+	APIServer          http.Handler
 	Handler            http.Handler
 	Tunnel             http.Handler
 	Authenticator      authenticator.Request
@@ -242,7 +261,8 @@ type ControlRuntime struct {
 	ClientETCDCert           string
 	ClientETCDKey            string
 
-	Core *core.Factory
+	Core       *core.Factory
+	EtcdConfig endpoint.ETCDConfig
 }
 
 type ArgString []string

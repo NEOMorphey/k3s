@@ -16,6 +16,7 @@ import (
 	"github.com/rancher/k3s/pkg/agent/loadbalancer"
 	"github.com/rancher/k3s/pkg/cli/cmds"
 	"github.com/rancher/k3s/pkg/clientaccess"
+	"github.com/rancher/k3s/pkg/daemons/config"
 	"github.com/rancher/k3s/pkg/datadir"
 	"github.com/rancher/k3s/pkg/etcd"
 	"github.com/rancher/k3s/pkg/netutil"
@@ -38,16 +39,10 @@ import (
 )
 
 func Run(app *cli.Context) error {
-	if err := cmds.InitLogging(); err != nil {
-		return err
-	}
 	return run(app, &cmds.ServerConfig, server.CustomControllers{}, server.CustomControllers{})
 }
 
 func RunWithControllers(app *cli.Context, leaderControllers server.CustomControllers, controllers server.CustomControllers) error {
-	if err := cmds.InitLogging(); err != nil {
-		return err
-	}
 	return run(app, &cmds.ServerConfig, leaderControllers, controllers)
 }
 
@@ -59,6 +54,17 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 	// hide process arguments from ps output, since they may contain
 	// database credentials or other secrets.
 	gspt.SetProcTitle(os.Args[0] + " server")
+
+	// Evacuate cgroup v2 before doing anything else that may fork.
+	if err := cmds.EvacuateCgroup2(); err != nil {
+		return err
+	}
+
+	// Initialize logging, and subprocess reaping if necessary.
+	// Log output redirection and subprocess reaping both require forking.
+	if err := cmds.InitLogging(); err != nil {
+		return err
+	}
 
 	if !cfg.DisableAgent && os.Getuid() != 0 && !cfg.Rootless {
 		return fmt.Errorf("must run as root unless --disable-agent is specified")
@@ -79,8 +85,11 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 		cfg.Token = cfg.ClusterSecret
 	}
 
+	agentReady := make(chan struct{})
+
 	serverConfig := server.Config{}
 	serverConfig.DisableAgent = cfg.DisableAgent
+	serverConfig.ControlConfig.Runtime = &config.ControlRuntime{AgentReady: agentReady}
 	serverConfig.ControlConfig.Token = cfg.Token
 	serverConfig.ControlConfig.AgentToken = cfg.AgentToken
 	serverConfig.ControlConfig.JoinURL = cfg.ServerURL
@@ -108,6 +117,7 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 	serverConfig.ControlConfig.APIServerBindAddress = cfg.APIServerBindAddress
 	serverConfig.ControlConfig.ExtraAPIArgs = cfg.ExtraAPIArgs
 	serverConfig.ControlConfig.ExtraControllerArgs = cfg.ExtraControllerArgs
+	serverConfig.ControlConfig.ExtraEtcdArgs = cfg.ExtraEtcdArgs
 	serverConfig.ControlConfig.ExtraSchedulerAPIArgs = cfg.ExtraSchedulerArgs
 	serverConfig.ControlConfig.ClusterDomain = cfg.ClusterDomain
 	serverConfig.ControlConfig.Datastore.Endpoint = cfg.DatastoreEndpoint
@@ -145,6 +155,8 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 		serverConfig.ControlConfig.EtcdS3BucketName = cfg.EtcdS3BucketName
 		serverConfig.ControlConfig.EtcdS3Region = cfg.EtcdS3Region
 		serverConfig.ControlConfig.EtcdS3Folder = cfg.EtcdS3Folder
+		serverConfig.ControlConfig.EtcdS3Insecure = cfg.EtcdS3Insecure
+		serverConfig.ControlConfig.EtcdS3Timeout = cfg.EtcdS3Timeout
 	} else {
 		logrus.Info("ETCD snapshots are disabled")
 	}
@@ -162,9 +174,25 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 		serverConfig.ControlConfig.DisableScheduler = true
 		serverConfig.ControlConfig.DisableCCM = true
 
+		dataDir, err := datadir.LocalHome(cfg.DataDir, false)
+		if err != nil {
+			return err
+		}
 		// delete local loadbalancers state for apiserver and supervisor servers
-		loadbalancer.ResetLoadBalancer(filepath.Join(cfg.DataDir, "agent"), loadbalancer.SupervisorServiceName)
-		loadbalancer.ResetLoadBalancer(filepath.Join(cfg.DataDir, "agent"), loadbalancer.APIServerServiceName)
+		loadbalancer.ResetLoadBalancer(filepath.Join(dataDir, "agent"), loadbalancer.SupervisorServiceName)
+		loadbalancer.ResetLoadBalancer(filepath.Join(dataDir, "agent"), loadbalancer.APIServerServiceName)
+
+		// at this point we're doing a restore. Check to see if we've
+		// passed in a token and if not, check if the token file exists.
+		// If it doesn't, return an error indicating the token is necessary.
+		if cfg.Token == "" {
+			tokenFile := filepath.Join(dataDir, "server", "token")
+			if _, err := os.Stat(tokenFile); err != nil {
+				if os.IsNotExist(err) {
+					return errors.New(tokenFile + " does not exist, please pass --token to complete the restoration")
+				}
+			}
+		}
 	}
 
 	serverConfig.ControlConfig.ClusterReset = cfg.ClusterReset
@@ -222,6 +250,7 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 	if err != nil {
 		return err
 	}
+	serverConfig.ControlConfig.ServerNodeName = nodeName
 	serverConfig.ControlConfig.SANs = append(serverConfig.ControlConfig.SANs, "127.0.0.1", "localhost", nodeName)
 	for _, ip := range nodeIPs {
 		serverConfig.ControlConfig.SANs = append(serverConfig.ControlConfig.SANs, ip.String())
@@ -385,7 +414,7 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 
 	notifySocket := os.Getenv("NOTIFY_SOCKET")
 
-	ctx := signals.SetupSignalHandler(context.Background())
+	ctx := signals.SetupSignalContext()
 
 	if err := server.StartServer(ctx, &serverConfig, cfg); err != nil {
 		return err
@@ -408,6 +437,7 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 	}()
 
 	if cfg.DisableAgent {
+		close(agentReady)
 		<-ctx.Done()
 		return nil
 	}
@@ -424,11 +454,13 @@ func run(app *cli.Context, cfg *cmds.Server, leaderControllers server.CustomCont
 	}
 
 	agentConfig := cmds.AgentConfig
+	agentConfig.AgentReady = agentReady
 	agentConfig.Debug = app.GlobalBool("debug")
 	agentConfig.DataDir = filepath.Dir(serverConfig.ControlConfig.DataDir)
 	agentConfig.ServerURL = url
 	agentConfig.Token = token
 	agentConfig.DisableLoadBalancer = !serverConfig.ControlConfig.DisableAPIServer
+	agentConfig.DisableServiceLB = serverConfig.DisableServiceLB
 	agentConfig.ETCDAgent = serverConfig.ControlConfig.DisableAPIServer
 	agentConfig.ClusterReset = serverConfig.ControlConfig.ClusterReset
 
@@ -466,8 +498,8 @@ func validateNetworkConfiguration(serverConfig server.Config) error {
 		return errors.Wrap(err, "failed to validate cluster-dns")
 	}
 
-	if (serverConfig.ControlConfig.FlannelBackend != "none" || serverConfig.ControlConfig.DisableNPC == false) && (dualCluster || dualService) {
-		return errors.New("flannel CNI and network policy enforcement are not compatible with dual-stack operation; server must be restarted with --flannel-backend=none --disable-network-policy and an alternative CNI plugin deployed")
+	if (serverConfig.ControlConfig.DisableNPC == false) && (dualCluster || dualService) {
+		return errors.New("network policy enforcement is not compatible with dual-stack operation; server must be restarted with --disable-network-policy")
 	}
 	if dualDNS == true {
 		return errors.New("dual-stack cluster-dns is not supported")

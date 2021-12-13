@@ -1,4 +1,4 @@
-ARG GOLANG=golang:1.16.6-alpine3.13
+ARG GOLANG=golang:1.16.10-alpine3.13
 FROM ${GOLANG}
 
 ARG http_proxy=$http_proxy
@@ -9,9 +9,9 @@ ENV https_proxy=$https_proxy
 ENV no_proxy=$no_proxy
 
 RUN apk -U --no-cache add bash git gcc musl-dev docker vim less file curl wget ca-certificates jq linux-headers \
-    zlib-dev tar zip squashfs-tools npm coreutils python2 openssl-dev libffi-dev libseccomp libseccomp-dev \
+    zlib-dev tar zip squashfs-tools npm coreutils python3 openssl-dev libffi-dev libseccomp libseccomp-dev \
     libseccomp-static make libuv-static sqlite-dev sqlite-static libselinux libselinux-dev zlib-dev zlib-static \
-    zstd gzip alpine-sdk binutils-gold
+    zstd pigz alpine-sdk binutils-gold btrfs-progs-dev btrfs-progs-static gawk
 RUN if [ "$(go env GOARCH)" = "arm64" ]; then                                                               \
     wget https://github.com/aquasecurity/trivy/releases/download/v0.16.0/trivy_0.16.0_Linux-ARM64.tar.gz && \
     tar -zxvf trivy_0.16.0_Linux-ARM64.tar.gz                                                            && \
@@ -41,7 +41,7 @@ ENV SELINUX $SELINUX
 
 ENV GO111MODULE off
 ENV DAPPER_RUN_ARGS --privileged -v k3s-cache:/go/src/github.com/rancher/k3s/.cache -v trivy-cache:/root/.cache/trivy
-ENV DAPPER_ENV REPO TAG DRONE_TAG IMAGE_NAME SKIP_VALIDATE GCLOUD_AUTH GITHUB_TOKEN GOLANG
+ENV DAPPER_ENV REPO TAG DRONE_TAG IMAGE_NAME SKIP_VALIDATE SKIP_AIRGAP GCLOUD_AUTH GITHUB_TOKEN GOLANG
 ENV DAPPER_SOURCE /go/src/github.com/rancher/k3s/
 ENV DAPPER_OUTPUT ./bin ./dist ./build/out
 ENV DAPPER_DOCKER_SOCKET true

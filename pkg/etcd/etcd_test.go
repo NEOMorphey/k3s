@@ -7,34 +7,48 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/rancher/k3s/pkg/clientaccess"
 	"github.com/rancher/k3s/pkg/daemons/config"
 	testutil "github.com/rancher/k3s/tests/util"
 	"github.com/robfig/cron/v3"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/server/v3/etcdserver"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 )
 
-func generateTestConfig() *config.Control {
-	_, clusterIPNet, _ := net.ParseCIDR("10.42.0.0/16")
-	_, serviceIPNet, _ := net.ParseCIDR("10.43.0.0/16")
+func mustGetAddress() string {
+	ipAddr, err := utilnet.ChooseHostInterface()
+	if err != nil {
+		panic(err)
+	}
+	return ipAddr.String()
+}
 
+func generateTestConfig() *config.Control {
+	agentReady := make(chan struct{})
+	close(agentReady)
+	criticalControlArgs := config.CriticalControlArgs{
+		ClusterDomain:  "cluster.local",
+		ClusterDNS:     net.ParseIP("10.43.0.10"),
+		ClusterIPRange: testutil.ClusterIPNet(),
+		FlannelBackend: "vxlan",
+		ServiceIPRange: testutil.ServiceIPNet(),
+	}
 	return &config.Control{
+		Runtime:               &config.ControlRuntime{AgentReady: agentReady},
 		HTTPSPort:             6443,
 		SupervisorPort:        6443,
 		AdvertisePort:         6443,
-		ClusterDomain:         "cluster.local",
-		ClusterDNS:            net.ParseIP("10.43.0.10"),
-		ClusterIPRange:        clusterIPNet,
 		DataDir:               "/tmp/k3s/", // Different than the default value
-		FlannelBackend:        "vxlan",
 		EtcdSnapshotName:      "etcd-snapshot",
 		EtcdSnapshotCron:      "0 */12 * * *",
 		EtcdSnapshotRetention: 5,
 		EtcdS3Endpoint:        "s3.amazonaws.com",
 		EtcdS3Region:          "us-east-1",
 		SANs:                  []string{"127.0.0.1"},
-		ServiceIPRange:        serviceIPNet,
+		CriticalControlArgs:   criticalControlArgs,
 	}
 }
 
@@ -156,17 +170,17 @@ func Test_UnitETCD_Register(t *testing.T) {
 				if err := testutil.GenerateRuntime(cnf); err != nil {
 					return err
 				}
-				if err := os.MkdirAll(etcdDBDir(cnf), 0700); err != nil {
+				if err := os.MkdirAll(DBDir(cnf), 0700); err != nil {
 					return err
 				}
-				tombstoneFile := filepath.Join(etcdDBDir(cnf), "tombstone")
+				tombstoneFile := filepath.Join(DBDir(cnf), "tombstone")
 				if _, err := os.Create(tombstoneFile); err != nil {
 					return err
 				}
 				return nil
 			},
 			teardown: func(cnf *config.Control) error {
-				tombstoneFile := filepath.Join(etcdDBDir(cnf), "tombstone")
+				tombstoneFile := filepath.Join(DBDir(cnf), "tombstone")
 				os.Remove(tombstoneFile)
 				testutil.CleanupDataDir(cnf)
 				return nil
@@ -192,43 +206,58 @@ func Test_UnitETCD_Register(t *testing.T) {
 }
 
 func Test_UnitETCD_Start(t *testing.T) {
+	type contextInfo struct {
+		ctx    context.Context
+		cancel context.CancelFunc
+	}
 	type fields struct {
+		context contextInfo
 		client  *clientv3.Client
 		config  *config.Control
 		name    string
-		runtime *config.ControlRuntime
 		address string
 		cron    *cron.Cron
 		s3      *S3
 	}
 	type args struct {
-		ctx              context.Context
 		clientAccessInfo *clientaccess.Info
 	}
 	tests := []struct {
 		name     string
 		fields   fields
 		args     args
-		setup    func(cnf *config.Control) error
-		teardown func(cnf *config.Control) error
+		setup    func(e *ETCD, ctxInfo *contextInfo) error
+		teardown func(e *ETCD, ctxInfo *contextInfo) error
 		wantErr  bool
 	}{
 		{
 			name: "Start etcd without clientAccessInfo and without snapshots",
 			fields: fields{
 				config:  generateTestConfig(),
-				address: "192.168.1.123", // Local IP address
+				address: mustGetAddress(),
+				name:    "default",
 			},
 			args: args{
-				ctx:              context.TODO(),
 				clientAccessInfo: nil,
 			},
-			setup: func(cnf *config.Control) error {
-				cnf.EtcdDisableSnapshots = true
-				return testutil.GenerateRuntime(cnf)
+			setup: func(e *ETCD, ctxInfo *contextInfo) error {
+				ctxInfo.ctx, ctxInfo.cancel = context.WithCancel(context.Background())
+				e.config.EtcdDisableSnapshots = true
+				testutil.GenerateRuntime(e.config)
+				e.runtime = e.config.Runtime
+				client, err := GetClient(ctxInfo.ctx, e.runtime, endpoint)
+				e.client = client
+
+				return err
 			},
-			teardown: func(cnf *config.Control) error {
-				testutil.CleanupDataDir(cnf)
+			teardown: func(e *ETCD, ctxInfo *contextInfo) error {
+				// RemoveSelf will fail with a specific error, but it still does cleanup for testing purposes
+				if err := e.RemoveSelf(ctxInfo.ctx); err != nil && err.Error() != etcdserver.ErrNotEnoughStartedMembers.Error() {
+					return err
+				}
+				ctxInfo.cancel()
+				time.Sleep(10 * time.Second)
+				testutil.CleanupDataDir(e.config)
 				return nil
 			},
 		},
@@ -236,18 +265,30 @@ func Test_UnitETCD_Start(t *testing.T) {
 			name: "Start etcd without clientAccessInfo on",
 			fields: fields{
 				config:  generateTestConfig(),
-				address: "192.168.1.123", // Local IP address
+				address: mustGetAddress(),
+				name:    "default",
 				cron:    cron.New(),
 			},
 			args: args{
-				ctx:              context.TODO(),
 				clientAccessInfo: nil,
 			},
-			setup: func(cnf *config.Control) error {
-				return testutil.GenerateRuntime(cnf)
+			setup: func(e *ETCD, ctxInfo *contextInfo) error {
+				ctxInfo.ctx, ctxInfo.cancel = context.WithCancel(context.Background())
+				testutil.GenerateRuntime(e.config)
+				e.runtime = e.config.Runtime
+				client, err := GetClient(ctxInfo.ctx, e.runtime, endpoint)
+				e.client = client
+
+				return err
 			},
-			teardown: func(cnf *config.Control) error {
-				testutil.CleanupDataDir(cnf)
+			teardown: func(e *ETCD, ctxInfo *contextInfo) error {
+				// RemoveSelf will fail with a specific error, but it still does cleanup for testing purposes
+				if err := e.RemoveSelf(ctxInfo.ctx); err != nil && err.Error() != etcdserver.ErrNotEnoughStartedMembers.Error() {
+					return err
+				}
+				ctxInfo.cancel()
+				time.Sleep(5 * time.Second)
+				testutil.CleanupDataDir(e.config)
 				return nil
 			},
 		},
@@ -255,22 +296,35 @@ func Test_UnitETCD_Start(t *testing.T) {
 			name: "Start etcd with an existing cluster",
 			fields: fields{
 				config:  generateTestConfig(),
-				address: "192.168.1.123", // Local IP address
+				address: mustGetAddress(),
+				name:    "default",
 				cron:    cron.New(),
 			},
 			args: args{
-				ctx:              context.TODO(),
 				clientAccessInfo: nil,
 			},
-			setup: func(cnf *config.Control) error {
-				if err := testutil.GenerateRuntime(cnf); err != nil {
+			setup: func(e *ETCD, ctxInfo *contextInfo) error {
+				ctxInfo.ctx, ctxInfo.cancel = context.WithCancel(context.Background())
+				if err := testutil.GenerateRuntime(e.config); err != nil {
 					return err
 				}
-				return os.MkdirAll(walDir(cnf), 0700)
+				e.runtime = e.config.Runtime
+				client, err := GetClient(ctxInfo.ctx, e.runtime, endpoint)
+				if err != nil {
+					return err
+				}
+				e.client = client
+				return os.MkdirAll(walDir(e.config), 0700)
 			},
-			teardown: func(cnf *config.Control) error {
-				testutil.CleanupDataDir(cnf)
-				os.Remove(walDir(cnf))
+			teardown: func(e *ETCD, ctxInfo *contextInfo) error {
+				// RemoveSelf will fail with a specific error, but it still does cleanup for testing purposes
+				if err := e.RemoveSelf(ctxInfo.ctx); err != nil && err.Error() != etcdserver.ErrNotEnoughStartedMembers.Error() {
+					return err
+				}
+				ctxInfo.cancel()
+				time.Sleep(5 * time.Second)
+				testutil.CleanupDataDir(e.config)
+				os.Remove(walDir(e.config))
 				return nil
 			},
 		},
@@ -281,18 +335,22 @@ func Test_UnitETCD_Start(t *testing.T) {
 				client:  tt.fields.client,
 				config:  tt.fields.config,
 				name:    tt.fields.name,
-				runtime: tt.fields.runtime,
+				runtime: tt.fields.config.Runtime,
 				address: tt.fields.address,
 				cron:    tt.fields.cron,
 				s3:      tt.fields.s3,
 			}
-			defer tt.teardown(e.config)
-			if err := tt.setup(e.config); err != nil {
+
+			if err := tt.setup(e, &tt.fields.context); err != nil {
 				t.Errorf("Setup for ETCD.Start() failed = %v", err)
 				return
 			}
-			if err := e.Start(tt.args.ctx, tt.args.clientAccessInfo); (err != nil) != tt.wantErr {
+			if err := e.Start(tt.fields.context.ctx, tt.args.clientAccessInfo); (err != nil) != tt.wantErr {
 				t.Errorf("ETCD.Start() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err := tt.teardown(e, &tt.fields.context); err != nil {
+				t.Errorf("Teardown for ETCD.Start() failed = %v", err)
+				return
 			}
 		})
 	}

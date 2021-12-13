@@ -240,7 +240,7 @@ sonobuoy-test() {
 
     local sonobuoyPID=$!
     local code=0
-    time timeout --foreground 30m bash -c test-wait $sonobuoyPID || code=$?
+    time timeout --foreground 60m bash -c test-wait $sonobuoyPID || code=$?
     echo "Sonobuoy finished with code $code"
     retrieve-sonobuoy-logs
     return $code
@@ -312,6 +312,13 @@ test-setup() {
     if [ -z "$K3S_IMAGE" ]; then
         echo 'K3S_IMAGE environment variable should be defined'
         return 1
+    fi
+
+    SERVER_MINOR=$(awk -F. '{print $2}' <<<${K3S_IMAGE_SERVER:-$K3S_IMAGE})
+    AGENT_MINOR=$(awk -F. '{print $2}' <<<${K3S_IMAGE_AGENT:-$K3S_IMAGE})
+    if [ $AGENT_MINOR -gt $SERVER_MINOR ]; then
+        echo "Agent minor version cannot be newer than server - not supported by Kubernetes version skew policy"
+        exit 0
     fi
 
     local setupFile=./scripts/test-setup-${TEST_TYPE}

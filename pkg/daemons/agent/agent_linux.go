@@ -26,12 +26,7 @@ func createRootlessConfig(argsMap map[string]string, hasCFS, hasPIDs bool) {
 		// cgroupfs v2, delegated for rootless by systemd
 		argsMap["cgroup-driver"] = "cgroupfs"
 	} else {
-		logrus.Warn("cgroup v2 controllers are not delegated for rootless. Setting cgroup driver to \"none\".")
-		// flags are from https://github.com/rootless-containers/usernetes/blob/v20190826.0/boot/kubelet.sh
-		argsMap["cgroup-driver"] = "none"
-		argsMap["feature-gates=SupportNoneCgroupDriver"] = "true"
-		argsMap["cgroups-per-qos"] = "false"
-		argsMap["enforce-node-allocatable"] = ""
+		logrus.Fatal("delegated cgroup v2 controllers are required for rootless.")
 	}
 }
 
@@ -139,10 +134,7 @@ func kubeletArgs(cfg *config.Agent) map[string]string {
 		argsMap["cpu-cfs-quota"] = "false"
 	}
 	if !hasPIDs {
-		logrus.Warn("Disabling pod PIDs limit feature due to missing cgroup pids support")
-		argsMap["cgroups-per-qos"] = "false"
-		argsMap["enforce-node-allocatable"] = ""
-		argsMap["feature-gates"] = util.AddFeatureGate(argsMap["feature-gates"], "SupportPodPidsLimit=false")
+		logrus.Fatal("PIDS cgroup support not found")
 	}
 	if kubeletRoot != "" {
 		argsMap["kubelet-cgroups"] = kubeletRoot
@@ -176,5 +168,10 @@ func kubeletArgs(cfg *config.Agent) map[string]string {
 	if cfg.ProtectKernelDefaults {
 		argsMap["protect-kernel-defaults"] = "true"
 	}
+
+	if !cfg.DisableServiceLB && cfg.EnableIPv6 {
+		argsMap["allowed-unsafe-sysctls"] = "net.ipv6.conf.all.forwarding"
+	}
+
 	return argsMap
 }

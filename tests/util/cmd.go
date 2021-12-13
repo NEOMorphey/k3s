@@ -15,6 +15,14 @@ import (
 // Compile-time variable
 var existingServer = "False"
 
+const lockFile = "/var/lock/k3s-test.lock"
+
+type K3sServer struct {
+	cmd     *exec.Cmd
+	scanner *bufio.Scanner
+	lock    int
+}
+
 func findK3sExecutable() string {
 	// if running on an existing cluster, it maybe installed via k3s.service
 	// or run manually from dist/artifacts/k3s
@@ -25,13 +33,17 @@ func findK3sExecutable() string {
 		}
 	}
 	k3sBin := "dist/artifacts/k3s"
-	for {
+	i := 0
+	for ; i < 20; i++ {
 		_, err := os.Stat(k3sBin)
 		if err != nil {
 			k3sBin = "../" + k3sBin
 			continue
 		}
 		break
+	}
+	if i == 20 {
+		logrus.Fatal("Unable to find k3s executable")
 	}
 	return k3sBin
 }
@@ -66,6 +78,18 @@ func K3sCmd(cmdName string, cmdArgs ...string) (string, error) {
 	}
 	byteOut, err := cmd.CombinedOutput()
 	return string(byteOut), err
+}
+
+// K3sRemoveDataDir removes the provided directory as root
+func K3sRemoveDataDir(dataDir string) error {
+	var cmd *exec.Cmd
+	if IsRoot() {
+		cmd = exec.Command("rm", "-rf", dataDir)
+	} else {
+		cmd = exec.Command("sudo", "rm", "-rf", dataDir)
+	}
+	_, err := cmd.CombinedOutput()
+	return err
 }
 
 func contains(source []string, target string) bool {
@@ -112,20 +136,19 @@ func FindStringInCmdAsync(scanner *bufio.Scanner, target string) bool {
 	return false
 }
 
-type K3sServer struct {
-	cmd     *exec.Cmd
-	scanner *bufio.Scanner
-	lock    int
-}
-
 // K3sStartServer acquires an exclusive lock on a temporary file, then launches a k3s cluster
 // with the provided arguments. Subsequent/parallel calls to this function will block until
 // the original lock is cleared using K3sKillServer
-func K3sStartServer(cmdArgs ...string) (*K3sServer, error) {
+func K3sStartServer(inputArgs ...string) (*K3sServer, error) {
 	logrus.Info("waiting to get server lock")
-	k3sLock, err := flock.Acquire("/var/lock/k3s-test.lock")
+	k3sLock, err := flock.Acquire(lockFile)
 	if err != nil {
 		return nil, err
+	}
+
+	var cmdArgs []string
+	for _, arg := range inputArgs {
+		cmdArgs = append(cmdArgs, strings.Fields(arg)...)
 	}
 
 	k3sBin := findK3sExecutable()

@@ -1,6 +1,7 @@
 package util
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 
@@ -33,8 +34,9 @@ func GenerateDataDir(cnf *config.Control) error {
 }
 
 // CleanupDataDir removes the associated "/tmp/k3s/<RANDOM_STRING>"
-// directory.
+// directory along with the 'latest' symlink that points at it.
 func CleanupDataDir(cnf *config.Control) {
+	os.Remove(filepath.Join(cnf.DataDir, "..", "latest"))
 	os.RemoveAll(cnf.DataDir)
 }
 
@@ -49,11 +51,21 @@ func GenerateRuntime(cnf *config.Control) error {
 	os.MkdirAll(filepath.Join(cnf.DataDir, "tls"), 0700)
 	os.MkdirAll(filepath.Join(cnf.DataDir, "cred"), 0700)
 
-	deps.FillRuntimeCerts(cnf, runtime)
+	deps.CreateRuntimeCertFiles(cnf, runtime)
 
 	if err := deps.GenServerDeps(cnf, runtime); err != nil {
 		return err
 	}
 	cnf.Runtime = runtime
 	return nil
+}
+
+func ClusterIPNet() *net.IPNet {
+	_, clusterIPNet, _ := net.ParseCIDR("10.42.0.0/16")
+	return clusterIPNet
+}
+
+func ServiceIPNet() *net.IPNet {
+	_, serviceIPNet, _ := net.ParseCIDR("10.43.0.0/16")
+	return serviceIPNet
 }

@@ -2,25 +2,25 @@ package integration
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"testing"
 	"time"
 
-	. "github.com/onsi/ginkgo"
-	"github.com/onsi/ginkgo/reporters"
+	testutil "github.com/k3s-io/k3s/tests/integration"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	testutil "github.com/rancher/k3s/tests/util"
 )
 
 var secretsEncryptionServer *testutil.K3sServer
 var secretsEncryptionDataDir = "/tmp/k3sse"
-
 var secretsEncryptionServerArgs = []string{"--secrets-encryption", "-d", secretsEncryptionDataDir}
+var testLock int
+
 var _ = BeforeSuite(func() {
 	if !testutil.IsExistingServer() {
 		var err error
-		Expect(os.MkdirAll(secretsEncryptionDataDir, 0777)).To(Succeed())
+		testLock, err = testutil.K3sTestLock()
+		Expect(err).ToNot(HaveOccurred())
 		secretsEncryptionServer, err = testutil.K3sStartServer(secretsEncryptionServerArgs...)
 		Expect(err).ToNot(HaveOccurred())
 	}
@@ -34,9 +34,9 @@ var _ = Describe("secrets encryption rotation", func() {
 	})
 	When("A server starts with secrets encryption", func() {
 		It("starts up with no problems", func() {
-			Eventually(func() (string, error) {
-				return testutil.K3sCmd("kubectl get pods -A")
-			}, "180s", "1s").Should(MatchRegexp("kube-system.+coredns.+1\\/1.+Running"))
+			Eventually(func() error {
+				return testutil.K3sDefaultDeployments()
+			}, "180s", "5s").Should(Succeed())
 		})
 		It("it creates a encryption key", func() {
 			result, err := testutil.K3sCmd("secrets-encrypt status -d", secretsEncryptionDataDir)
@@ -62,12 +62,12 @@ var _ = Describe("secrets encryption rotation", func() {
 		})
 		It("restarts the server", func() {
 			var err error
-			Expect(testutil.K3sKillServer(secretsEncryptionServer, true)).To(Succeed())
+			Expect(testutil.K3sKillServer(secretsEncryptionServer)).To(Succeed())
 			secretsEncryptionServer, err = testutil.K3sStartServer(secretsEncryptionServerArgs...)
 			Expect(err).ToNot(HaveOccurred())
-			Eventually(func() (string, error) {
-				return testutil.K3sCmd("kubectl get pods -A")
-			}, "180s", "1s").Should(MatchRegexp("kube-system.+coredns.+1\\/1.+Running"))
+			Eventually(func() error {
+				return testutil.K3sDefaultDeployments()
+			}, "180s", "5s").Should(Succeed())
 		})
 		It("rotates the keys", func() {
 			Eventually(func() (string, error) {
@@ -86,12 +86,12 @@ var _ = Describe("secrets encryption rotation", func() {
 		})
 		It("restarts the server", func() {
 			var err error
-			Expect(testutil.K3sKillServer(secretsEncryptionServer, true)).To(Succeed())
+			Expect(testutil.K3sKillServer(secretsEncryptionServer)).To(Succeed())
 			secretsEncryptionServer, err = testutil.K3sStartServer(secretsEncryptionServerArgs...)
 			Expect(err).ToNot(HaveOccurred())
-			Eventually(func() (string, error) {
-				return testutil.K3sCmd("kubectl get pods -A")
-			}, "180s", "1s").Should(MatchRegexp("kube-system.+coredns.+1\\/1.+Running"))
+			Eventually(func() error {
+				return testutil.K3sDefaultDeployments()
+			}, "180s", "5s").Should(Succeed())
 			time.Sleep(10 * time.Second)
 		})
 		It("reencrypts the keys", func() {
@@ -99,7 +99,7 @@ var _ = Describe("secrets encryption rotation", func() {
 				To(ContainSubstring("reencryption started"))
 			Eventually(func() (string, error) {
 				return testutil.K3sCmd("secrets-encrypt status -d", secretsEncryptionDataDir)
-			}, "30s", "2s").Should(ContainSubstring("Current Rotation Stage: reencrypt_finished"))
+			}, "45s", "2s").Should(ContainSubstring("Current Rotation Stage: reencrypt_finished"))
 			result, err := testutil.K3sCmd("secrets-encrypt status -d", secretsEncryptionDataDir)
 			Expect(err).NotTo(HaveOccurred())
 			reg, err := regexp.Compile(`AES-CBC.+aescbckey.*`)
@@ -120,12 +120,12 @@ var _ = Describe("secrets encryption rotation", func() {
 		})
 		It("restarts the server", func() {
 			var err error
-			Expect(testutil.K3sKillServer(secretsEncryptionServer, true)).To(Succeed())
+			Expect(testutil.K3sKillServer(secretsEncryptionServer)).To(Succeed())
 			secretsEncryptionServer, err = testutil.K3sStartServer(secretsEncryptionServerArgs...)
 			Expect(err).ToNot(HaveOccurred())
-			Eventually(func() (string, error) {
-				return testutil.K3sCmd("kubectl get pods -A")
-			}, "180s", "1s").Should(MatchRegexp("kube-system.+coredns.+1\\/1.+Running"))
+			Eventually(func() error {
+				return testutil.K3sDefaultDeployments()
+			}, "180s", "5s").Should(Succeed())
 			time.Sleep(10 * time.Second)
 		})
 		It("reencrypts the keys", func() {
@@ -142,14 +142,12 @@ var _ = Describe("secrets encryption rotation", func() {
 
 var _ = AfterSuite(func() {
 	if !testutil.IsExistingServer() {
-		Expect(testutil.K3sKillServer(secretsEncryptionServer, true)).To(Succeed())
-		Expect(os.RemoveAll(secretsEncryptionDataDir)).To(Succeed())
+		Expect(testutil.K3sKillServer(secretsEncryptionServer)).To(Succeed())
+		Expect(testutil.K3sCleanup(testLock, secretsEncryptionDataDir)).To(Succeed())
 	}
 })
 
 func Test_IntegrationSecretsEncryption(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecsWithDefaultAndCustomReporters(t, "Secrets Encryption Suite", []Reporter{
-		reporters.NewJUnitReporter("/tmp/results/junit-se.xml"),
-	})
+	RunSpecs(t, "Secrets Encryption Suite")
 }

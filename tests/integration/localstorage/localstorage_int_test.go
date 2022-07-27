@@ -7,17 +7,20 @@ import (
 	"strings"
 	"testing"
 
-	. "github.com/onsi/ginkgo"
-	"github.com/onsi/ginkgo/reporters"
+	testutil "github.com/k3s-io/k3s/tests/integration"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	testutil "github.com/rancher/k3s/tests/util"
 )
 
 var localStorageServer *testutil.K3sServer
 var localStorageServerArgs = []string{"--cluster-init"}
+var testLock int
+
 var _ = BeforeSuite(func() {
 	if !testutil.IsExistingServer() {
 		var err error
+		testLock, err = testutil.K3sTestLock()
+		Expect(err).ToNot(HaveOccurred())
 		localStorageServer, err = testutil.K3sStartServer(localStorageServerArgs...)
 		Expect(err).ToNot(HaveOccurred())
 	}
@@ -31,9 +34,9 @@ var _ = Describe("local storage", func() {
 	})
 	When("a new local storage is created", func() {
 		It("starts up with no problems", func() {
-			Eventually(func() (string, error) {
-				return testutil.K3sCmd("kubectl get pods -A")
-			}, "90s", "1s").Should(MatchRegexp("kube-system.+coredns.+1\\/1.+Running"))
+			Eventually(func() error {
+				return testutil.K3sDefaultDeployments()
+			}, "120s", "5s").Should(Succeed())
 		})
 		It("creates a new pvc", func() {
 			result, err := testutil.K3sCmd("kubectl create -f ./testdata/localstorage_pvc.yaml")
@@ -81,14 +84,12 @@ var _ = Describe("local storage", func() {
 
 var _ = AfterSuite(func() {
 	if !testutil.IsExistingServer() {
-		Expect(testutil.K3sKillServer(localStorageServer, false)).To(Succeed())
-		Expect(testutil.K3sCleanup(localStorageServer, true)).To(Succeed())
+		Expect(testutil.K3sKillServer(localStorageServer)).To(Succeed())
+		Expect(testutil.K3sCleanup(testLock, "")).To(Succeed())
 	}
 })
 
 func Test_IntegrationLocalStorage(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecsWithDefaultAndCustomReporters(t, "Local Storage Suite", []Reporter{
-		reporters.NewJUnitReporter("/tmp/results/junit-ls.xml"),
-	})
+	RunSpecs(t, "Local Storage Suite")
 }

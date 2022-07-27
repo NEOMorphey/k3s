@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"net/http"
 
-	k3sv1 "github.com/rancher/k3s/pkg/generated/clientset/versioned/typed/k3s.cattle.io/v1"
+	k3sv1 "github.com/k3s-io/k3s/pkg/generated/clientset/versioned/typed/k3s.cattle.io/v1"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"
@@ -60,6 +60,10 @@ func (c *Clientset) Discovery() discovery.DiscoveryInterface {
 // where httpClient was generated with rest.HTTPClientFor(c).
 func NewForConfig(c *rest.Config) (*Clientset, error) {
 	configShallowCopy := *c
+
+	if configShallowCopy.UserAgent == "" {
+		configShallowCopy.UserAgent = rest.DefaultKubernetesUserAgent()
+	}
 
 	// share the transport between all clients
 	httpClient, err := rest.HTTPClientFor(&configShallowCopy)

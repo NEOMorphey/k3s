@@ -11,15 +11,16 @@ import (
 	"errors"
 	"os"
 
-	"github.com/rancher/k3s/pkg/cli/agent"
-	"github.com/rancher/k3s/pkg/cli/cert"
-	"github.com/rancher/k3s/pkg/cli/cmds"
-	"github.com/rancher/k3s/pkg/cli/crictl"
-	"github.com/rancher/k3s/pkg/cli/etcdsnapshot"
-	"github.com/rancher/k3s/pkg/cli/kubectl"
-	"github.com/rancher/k3s/pkg/cli/secretsencrypt"
-	"github.com/rancher/k3s/pkg/cli/server"
-	"github.com/rancher/k3s/pkg/configfilearg"
+	"github.com/k3s-io/k3s/pkg/cli/agent"
+	"github.com/k3s-io/k3s/pkg/cli/cert"
+	"github.com/k3s-io/k3s/pkg/cli/cmds"
+	"github.com/k3s-io/k3s/pkg/cli/completion"
+	"github.com/k3s-io/k3s/pkg/cli/crictl"
+	"github.com/k3s-io/k3s/pkg/cli/etcdsnapshot"
+	"github.com/k3s-io/k3s/pkg/cli/kubectl"
+	"github.com/k3s-io/k3s/pkg/cli/secretsencrypt"
+	"github.com/k3s-io/k3s/pkg/cli/server"
+	"github.com/k3s-io/k3s/pkg/configfilearg"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 )
@@ -31,12 +32,12 @@ func main() {
 		cmds.NewAgentCommand(agent.Run),
 		cmds.NewKubectlCommand(kubectl.Run),
 		cmds.NewCRICTL(crictl.Run),
-		cmds.NewEtcdSnapshotCommand(etcdsnapshot.Run,
+		cmds.NewEtcdSnapshotCommand(etcdsnapshot.Save,
 			cmds.NewEtcdSnapshotSubcommands(
 				etcdsnapshot.Delete,
 				etcdsnapshot.List,
 				etcdsnapshot.Prune,
-				etcdsnapshot.Run),
+				etcdsnapshot.Save),
 		),
 		cmds.NewSecretsEncryptCommand(cli.ShowAppHelp,
 			cmds.NewSecretsEncryptSubcommands(
@@ -51,6 +52,7 @@ func main() {
 			cmds.NewCertSubcommands(
 				cert.Run),
 		),
+		cmds.NewCompletionCommand(completion.Run),
 	}
 
 	if err := app.Run(configfilearg.MustParse(os.Args)); err != nil && !errors.Is(err, context.Canceled) {

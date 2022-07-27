@@ -217,11 +217,7 @@ setup_env() {
     if [ -n "${INSTALL_K3S_TYPE}" ]; then
         SYSTEMD_TYPE=${INSTALL_K3S_TYPE}
     else
-        if [ "${CMD_K3S}" = server ]; then
-            SYSTEMD_TYPE=notify
-        else
-            SYSTEMD_TYPE=exec
-        fi
+        SYSTEMD_TYPE=notify
     fi
 
     # --- use binary install directory if defined or create default ---
@@ -302,6 +298,10 @@ setup_verify_arch() {
             ;;
         arm64)
             ARCH=arm64
+            SUFFIX=-${ARCH}
+            ;;
+        s390x)
+            ARCH=s390x
             SUFFIX=-${ARCH}
             ;;
         aarch64)
@@ -671,9 +671,10 @@ done
 ip link delete cni0
 ip link delete flannel.1
 ip link delete flannel-v6.1
+ip link delete kube-ipvs0
 rm -rf /var/lib/cni/
-iptables-save | grep -v KUBE- | grep -v CNI- | iptables-restore
-ip6tables-save | grep -v KUBE- | grep -v CNI- | ip6tables-restore
+iptables-save | grep -v KUBE- | grep -v CNI- | grep -v flannel | iptables-restore
+ip6tables-save | grep -v KUBE- | grep -v CNI- | grep -v flannel | ip6tables-restore
 EOF
     $SUDO chmod 755 ${KILLALL_K3S_SH}
     $SUDO chown root:root ${KILLALL_K3S_SH}

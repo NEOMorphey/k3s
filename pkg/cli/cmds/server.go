@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rancher/k3s/pkg/version"
+	"github.com/k3s-io/k3s/pkg/version"
 	"github.com/urfave/cli"
 )
 
@@ -47,6 +47,7 @@ type Server struct {
 	KubeConfigMode           string
 	TLSSan                   cli.StringSlice
 	BindAddress              string
+	EnablePProf              bool
 	ExtraAPIArgs             cli.StringSlice
 	ExtraEtcdArgs            cli.StringSlice
 	ExtraSchedulerArgs       cli.StringSlice
@@ -63,6 +64,7 @@ type Server struct {
 	ServerURL                string
 	FlannelBackend           string
 	FlannelIPv6Masq          bool
+	EgressSelectorMode       string
 	DefaultLocalStoragePath  string
 	DisableCCM               bool
 	DisableNPC               bool
@@ -76,6 +78,7 @@ type Server struct {
 	ClusterResetRestorePath  string
 	EncryptSecrets           bool
 	EncryptForce             bool
+	EncryptOutput            string
 	EncryptSkip              bool
 	SystemDefaultRegistry    string
 	StartupHooks             []StartupHook
@@ -86,6 +89,7 @@ type Server struct {
 	EtcdSnapshotCron         string
 	EtcdSnapshotRetention    int
 	EtcdSnapshotCompress     bool
+	EtcdListFormat           string
 	EtcdS3                   bool
 	EtcdS3Endpoint           string
 	EtcdS3EndpointCA         string
@@ -97,6 +101,7 @@ type Server struct {
 	EtcdS3Folder             string
 	EtcdS3Timeout            time.Duration
 	EtcdS3Insecure           bool
+	ServiceLBNamespace       string
 }
 
 var (
@@ -202,7 +207,7 @@ var ServerFlags = []cli.Flag{
 	ClusterDomain,
 	cli.StringFlag{
 		Name:        "flannel-backend",
-		Usage:       "(networking) One of 'none', 'vxlan', 'ipsec', 'host-gw', or 'wireguard'",
+		Usage:       "(networking) backend<=option1=val1,option2=val2> where backend is one of 'none', 'vxlan', 'ipsec', 'host-gw', 'wireguard-native', or 'wireguard' (deprecated)",
 		Destination: &ServerConfig.FlannelBackend,
 		Value:       "vxlan",
 	},
@@ -210,6 +215,18 @@ var ServerFlags = []cli.Flag{
 		Name:        "flannel-ipv6-masq",
 		Usage:       "(networking) Enable IPv6 masquerading for pod",
 		Destination: &ServerConfig.FlannelIPv6Masq,
+	},
+	cli.StringFlag{
+		Name:        "egress-selector-mode",
+		Usage:       "(networking) One of 'agent', cluster', 'pod', 'disabled'",
+		Destination: &ServerConfig.EgressSelectorMode,
+		Value:       "agent",
+	},
+	cli.StringFlag{
+		Name:        "servicelb-namespace",
+		Usage:       "(networking) Namespace of the pods for the servicelb component",
+		Destination: &ServerConfig.ServiceLBNamespace,
+		Value:       "kube-system",
 	},
 	ServerToken,
 	cli.StringFlag{
@@ -229,6 +246,11 @@ var ServerFlags = []cli.Flag{
 		Usage:       "(client) Write kubeconfig with this mode",
 		Destination: &ServerConfig.KubeConfigMode,
 		EnvVar:      version.ProgramUpper + "_KUBECONFIG_MODE",
+	},
+	cli.BoolFlag{
+		Name:        "enable-pprof",
+		Usage:       "(experimental) Enable pprof endpoint on supervisor port",
+		Destination: &ServerConfig.EnablePProf,
 	},
 	ExtraAPIArgs,
 	ExtraEtcdArgs,
@@ -359,7 +381,7 @@ var ServerFlags = []cli.Flag{
 		Name:        "etcd-s3-timeout",
 		Usage:       "(db) S3 timeout",
 		Destination: &ServerConfig.EtcdS3Timeout,
-		Value:       30 * time.Second,
+		Value:       5 * time.Minute,
 	},
 	cli.StringFlag{
 		Name:        "default-local-storage-path",
@@ -430,6 +452,7 @@ var ServerFlags = []cli.Flag{
 	ResolvConfFlag,
 	FlannelIfaceFlag,
 	FlannelConfFlag,
+	FlannelCniConfFileFlag,
 	ExtraKubeletArgs,
 	ExtraKubeProxyArgs,
 	ProtectKernelDefaultsFlag,

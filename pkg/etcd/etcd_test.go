@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rancher/k3s/pkg/clientaccess"
-	"github.com/rancher/k3s/pkg/daemons/config"
-	testutil "github.com/rancher/k3s/tests/util"
+	"github.com/k3s-io/k3s/pkg/clientaccess"
+	"github.com/k3s-io/k3s/pkg/daemons/config"
+	testutil "github.com/k3s-io/k3s/tests"
 	"github.com/robfig/cron/v3"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/etcdserver"
@@ -244,8 +244,7 @@ func Test_UnitETCD_Start(t *testing.T) {
 				ctxInfo.ctx, ctxInfo.cancel = context.WithCancel(context.Background())
 				e.config.EtcdDisableSnapshots = true
 				testutil.GenerateRuntime(e.config)
-				e.runtime = e.config.Runtime
-				client, err := GetClient(ctxInfo.ctx, e.runtime, endpoint)
+				client, err := GetClient(ctxInfo.ctx, e.config)
 				e.client = client
 
 				return err
@@ -255,6 +254,7 @@ func Test_UnitETCD_Start(t *testing.T) {
 				if err := e.RemoveSelf(ctxInfo.ctx); err != nil && err.Error() != etcdserver.ErrNotEnoughStartedMembers.Error() {
 					return err
 				}
+				e.client.Close()
 				ctxInfo.cancel()
 				time.Sleep(10 * time.Second)
 				testutil.CleanupDataDir(e.config)
@@ -275,8 +275,7 @@ func Test_UnitETCD_Start(t *testing.T) {
 			setup: func(e *ETCD, ctxInfo *contextInfo) error {
 				ctxInfo.ctx, ctxInfo.cancel = context.WithCancel(context.Background())
 				testutil.GenerateRuntime(e.config)
-				e.runtime = e.config.Runtime
-				client, err := GetClient(ctxInfo.ctx, e.runtime, endpoint)
+				client, err := GetClient(ctxInfo.ctx, e.config)
 				e.client = client
 
 				return err
@@ -286,6 +285,7 @@ func Test_UnitETCD_Start(t *testing.T) {
 				if err := e.RemoveSelf(ctxInfo.ctx); err != nil && err.Error() != etcdserver.ErrNotEnoughStartedMembers.Error() {
 					return err
 				}
+				e.client.Close()
 				ctxInfo.cancel()
 				time.Sleep(5 * time.Second)
 				testutil.CleanupDataDir(e.config)
@@ -308,8 +308,7 @@ func Test_UnitETCD_Start(t *testing.T) {
 				if err := testutil.GenerateRuntime(e.config); err != nil {
 					return err
 				}
-				e.runtime = e.config.Runtime
-				client, err := GetClient(ctxInfo.ctx, e.runtime, endpoint)
+				client, err := GetClient(ctxInfo.ctx, e.config)
 				if err != nil {
 					return err
 				}
@@ -321,6 +320,7 @@ func Test_UnitETCD_Start(t *testing.T) {
 				if err := e.RemoveSelf(ctxInfo.ctx); err != nil && err.Error() != etcdserver.ErrNotEnoughStartedMembers.Error() {
 					return err
 				}
+				e.client.Close()
 				ctxInfo.cancel()
 				time.Sleep(5 * time.Second)
 				testutil.CleanupDataDir(e.config)
@@ -335,7 +335,6 @@ func Test_UnitETCD_Start(t *testing.T) {
 				client:  tt.fields.client,
 				config:  tt.fields.config,
 				name:    tt.fields.name,
-				runtime: tt.fields.config.Runtime,
 				address: tt.fields.address,
 				cron:    tt.fields.cron,
 				s3:      tt.fields.s3,

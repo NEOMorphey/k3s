@@ -93,7 +93,7 @@ if [ "$INSTALL_K3S_DEBUG" = "true" ]; then
     set -x
 fi
 
-GITHUB_URL=https://github.com/rancher/k3s/releases
+GITHUB_URL=https://github.com/k3s-io/k3s/releases
 STORAGE_URL=https://storage.googleapis.com/k3s-ci-builds
 DOWNLOADER=
 
@@ -292,6 +292,10 @@ setup_verify_arch() {
             ;;
         arm64)
             ARCH=arm64
+            SUFFIX=-${ARCH}
+            ;;
+        s390x)
+            ARCH=s390x
             SUFFIX=-${ARCH}
             ;;
         aarch64)
@@ -562,9 +566,10 @@ done
 ip link delete cni0
 ip link delete flannel.1
 ip link delete flannel-v6.1
+ip link delete kube-ipvs0
 rm -rf /var/lib/cni/
-iptables-save | grep -v KUBE- | grep -v CNI- | iptables-restore
-ip6tables-save | grep -v KUBE- | grep -v CNI- | ip6tables-restore
+iptables-save | grep -v KUBE- | grep -v CNI- | grep -v flannel | iptables-restore
+ip6tables-save | grep -v KUBE- | grep -v CNI- | grep -v flannel | ip6tables-restore
 EOF
     $SUDO chmod 755 ${KILLALL_K3S_SH}
     $SUDO chown root:root ${KILLALL_K3S_SH}

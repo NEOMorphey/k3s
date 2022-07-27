@@ -3,7 +3,7 @@ package cmds
 import (
 	"time"
 
-	"github.com/rancher/k3s/pkg/version"
+	"github.com/k3s-io/k3s/pkg/version"
 	"github.com/urfave/cli"
 )
 
@@ -95,7 +95,7 @@ var EtcdSnapshotFlags = []cli.Flag{
 		Name:        "s3-timeout,etcd-s3-timeout",
 		Usage:       "(db) S3 timeout",
 		Destination: &ServerConfig.EtcdS3Timeout,
-		Value:       30 * time.Second,
+		Value:       5 * time.Minute,
 	},
 }
 
@@ -128,7 +128,11 @@ func NewEtcdSnapshotSubcommands(delete, list, prune, save func(ctx *cli.Context)
 			SkipFlagParsing: false,
 			SkipArgReorder:  true,
 			Action:          list,
-			Flags:           EtcdSnapshotFlags,
+			Flags: append(EtcdSnapshotFlags, &cli.StringFlag{
+				Name:        "o,output",
+				Usage:       "(db) List format. Default: standard. Optional: json",
+				Destination: &ServerConfig.EtcdListFormat,
+			}),
 		},
 		{
 			Name:            "prune",

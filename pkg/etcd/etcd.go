@@ -707,20 +707,15 @@ func (e *ETCD) newCluster(ctx context.Context, reset bool) error {
 }
 
 func (e *ETCD) migrateFromSQLite(ctx context.Context) error {
-	_, err := os.Stat(sqliteFile(e.config))
-	if os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return err
-	}
 
-	logrus.Infof("Migrating content from sqlite to etcd")
+
+	logrus.Infof("Migrating content from PSQL to etcd")
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	_, err = endpoint2.Listen(ctx, endpoint2.Config{
-		Endpoint: endpoint2.SQLiteBackend,
+	_, err := endpoint2.Listen(ctx, endpoint2.Config{
+		Endpoint: "postgres://k3s:hnJ2WevHR8_uXS-f@postgres:5432/k3s",
 	})
 	if err != nil {
 		return err
@@ -746,14 +741,14 @@ func (e *ETCD) migrateFromSQLite(ctx context.Context) error {
 	}
 
 	for _, value := range values {
-		logrus.Infof("Migrating etcd key %s", value.Key)
+		logrus.Infof("Migrating psql key %s", value.Key)
 		_, err := etcdClient.Put(ctx, string(value.Key), string(value.Data))
 		if err != nil {
 			return err
 		}
 	}
 
-	return os.Rename(sqliteFile(e.config), sqliteFile(e.config)+".migrated")
+	return nil
 }
 
 // peerURL returns the external peer access address for the local node.

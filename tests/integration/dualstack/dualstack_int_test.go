@@ -13,8 +13,8 @@ import (
 var dualStackServer *testutil.K3sServer
 var dualStackServerArgs = []string{
 	"--cluster-init",
-	"--cluster-cidr 10.42.0.0/16,2001:cafe:42:0::/56",
-	"--service-cidr 10.43.0.0/16,2001:cafe:42:1::/112",
+	"--cluster-cidr", "10.42.0.0/16,2001:cafe:42:0::/56",
+	"--service-cidr", "10.43.0.0/16,2001:cafe:42:1::/112",
 	"--disable-network-policy",
 }
 var testLock int
@@ -29,7 +29,7 @@ var _ = BeforeSuite(func() {
 	}
 })
 
-var _ = Describe("dual stack", func() {
+var _ = Describe("dual stack", Ordered, func() {
 	BeforeEach(func() {
 		if testutil.IsExistingServer() && !testutil.ServerArgsPresent(dualStackServerArgs) {
 			Skip("Test needs k3s server with: " + strings.Join(dualStackServerArgs, " "))
@@ -53,8 +53,16 @@ var _ = Describe("dual stack", func() {
 	})
 })
 
+var failed bool
+var _ = AfterEach(func() {
+	failed = failed || CurrentSpecReport().Failed()
+})
+
 var _ = AfterSuite(func() {
 	if !testutil.IsExistingServer() && os.Getenv("CI") != "true" {
+		if failed {
+			testutil.K3sSaveLog(dualStackServer, false)
+		}
 		Expect(testutil.K3sKillServer(dualStackServer)).To(Succeed())
 		Expect(testutil.K3sCleanup(testLock, "")).To(Succeed())
 	}

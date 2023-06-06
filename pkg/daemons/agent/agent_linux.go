@@ -11,12 +11,13 @@ import (
 	"github.com/k3s-io/k3s/pkg/cgroups"
 	"github.com/k3s-io/k3s/pkg/daemons/config"
 	"github.com/k3s-io/k3s/pkg/util"
-	"github.com/opencontainers/runc/libcontainer/userns"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 	"k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/kubernetes/pkg/kubeapiserver/authorizer/modes"
 )
+
+const socketPrefix = "unix://"
 
 func createRootlessConfig(argsMap map[string]string, controllers map[string]bool) {
 	argsMap["feature-gates=KubeletInUserNamespace"] = "true"
@@ -27,14 +28,6 @@ func createRootlessConfig(argsMap map[string]string, controllers map[string]bool
 		return
 	}
 	logrus.Fatal("delegated cgroup v2 controllers are required for rootless.")
-}
-
-func checkRuntimeEndpoint(cfg *config.Agent, argsMap map[string]string) {
-	if strings.HasPrefix(argsMap["container-runtime-endpoint"], unixPrefix) {
-		argsMap["container-runtime-endpoint"] = cfg.RuntimeSocket
-	} else {
-		argsMap["container-runtime-endpoint"] = unixPrefix + cfg.RuntimeSocket
-	}
 }
 
 func kubeProxyArgs(cfg *config.Agent) map[string]string {
@@ -94,18 +87,25 @@ func kubeletArgs(cfg *config.Agent) map[string]string {
 		argsMap["resolv-conf"] = cfg.ResolvConf
 	}
 	if cfg.RuntimeSocket != "" {
-		argsMap["containerd"] = cfg.RuntimeSocket
 		argsMap["serialize-image-pulls"] = "false"
-		checkRuntimeEndpoint(cfg, argsMap)
+		if strings.Contains(cfg.RuntimeSocket, "containerd") {
+			argsMap["containerd"] = cfg.RuntimeSocket
+		}
+		// cadvisor wants the containerd CRI socket without the prefix, but kubelet wants it with the prefix
+		if strings.HasPrefix(cfg.RuntimeSocket, socketPrefix) {
+			argsMap["container-runtime-endpoint"] = cfg.RuntimeSocket
+		} else {
+			argsMap["container-runtime-endpoint"] = socketPrefix + cfg.RuntimeSocket
+		}
 	}
 	if cfg.PauseImage != "" {
 		argsMap["pod-infra-container-image"] = cfg.PauseImage
 	}
 	if cfg.ImageServiceSocket != "" {
-		if strings.HasPrefix(cfg.ImageServiceSocket, unixPrefix) {
+		if strings.HasPrefix(cfg.ImageServiceSocket, socketPrefix) {
 			argsMap["image-service-endpoint"] = cfg.ImageServiceSocket
 		} else {
-			argsMap["image-service-endpoint"] = unixPrefix + cfg.ImageServiceSocket
+			argsMap["image-service-endpoint"] = socketPrefix + cfg.ImageServiceSocket
 		}
 	}
 	if cfg.ListenAddress != "" {
@@ -140,9 +140,6 @@ func kubeletArgs(cfg *config.Agent) map[string]string {
 	if runtimeRoot != "" {
 		argsMap["runtime-cgroups"] = runtimeRoot
 	}
-	if userns.RunningInUserNS() {
-		argsMap["feature-gates"] = util.AddFeatureGate(argsMap["feature-gates"], "DevicePlugins=false")
-	}
 
 	argsMap["node-labels"] = strings.Join(cfg.NodeLabels, ",")
 	if len(cfg.NodeTaints) > 0 {
@@ -172,8 +169,8 @@ func kubeletArgs(cfg *config.Agent) map[string]string {
 		argsMap["protect-kernel-defaults"] = "true"
 	}
 
-	if !cfg.DisableServiceLB && cfg.EnableIPv6 {
-		argsMap["allowed-unsafe-sysctls"] = "net.ipv6.conf.all.forwarding"
+	if !cfg.DisableServiceLB {
+		argsMap["allowed-unsafe-sysctls"] = "net.ipv4.ip_forward,net.ipv6.conf.all.forwarding"
 	}
 
 	return argsMap

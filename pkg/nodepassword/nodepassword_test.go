@@ -1,8 +1,8 @@
 package nodepassword
 
 import (
+	"errors"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"runtime"
@@ -88,6 +88,13 @@ func Test_UnitMigrateFileNodes(t *testing.T) {
 	newNode := fmt.Sprintf("node%d", createNumNodes+1)
 	assertEqual(t, Ensure(secretClient, newNode, "new-password"), nil)
 	assertNotEqual(t, Ensure(secretClient, newNode, "wrong-password"), nil)
+}
+
+func Test_PasswordError(t *testing.T) {
+	err := &passwordError{node: "test", err: fmt.Errorf("inner error")}
+	assertEqual(t, errors.Is(err, ErrVerifyFailed), true)
+	assertEqual(t, errors.Is(err, fmt.Errorf("different error")), false)
+	assertNotEqual(t, errors.Unwrap(err), nil)
 }
 
 // --------------------------
@@ -209,7 +216,7 @@ func assertNotEqual(t *testing.T, a interface{}, b interface{}) {
 }
 
 func generateNodePasswordFile(migrateNumNodes int) string {
-	tempFile, err := ioutil.TempFile("", "node-password-test.*")
+	tempFile, err := os.CreateTemp("", "node-password-test.*")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -219,7 +226,7 @@ func generateNodePasswordFile(migrateNumNodes int) string {
 	for i := 1; i <= migrateNumNodes; i++ {
 		passwordEntries += fmt.Sprintf("node%d,node%d\n", i, i)
 	}
-	if err := ioutil.WriteFile(tempFile.Name(), []byte(passwordEntries), 0600); err != nil {
+	if err := os.WriteFile(tempFile.Name(), []byte(passwordEntries), 0600); err != nil {
 		log.Fatal(err)
 	}
 

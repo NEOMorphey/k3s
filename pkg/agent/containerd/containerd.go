@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +18,7 @@ import (
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/pkg/cri/constants"
 	"github.com/containerd/containerd/reference/docker"
+	"github.com/k3s-io/k3s/pkg/agent/cri"
 	util2 "github.com/k3s-io/k3s/pkg/agent/util"
 	"github.com/k3s-io/k3s/pkg/daemons/config"
 	"github.com/k3s-io/k3s/pkg/version"
@@ -28,35 +28,38 @@ import (
 	"github.com/rancher/wrangler/pkg/merr"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
-	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
-)
-
-const (
-	maxMsgSize = 1024 * 1024 * 16
+	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
 // Run configures and starts containerd as a child process. Once it is up, images are preloaded
 // or pulled from files found in the agent images directory.
 func Run(ctx context.Context, cfg *config.Node) error {
-	args := getContainerdArgs(cfg)
-
 	if err := setupContainerdConfig(ctx, cfg); err != nil {
 		return err
 	}
 
+	args := getContainerdArgs(cfg)
 	stdOut := io.Writer(os.Stdout)
 	stdErr := io.Writer(os.Stderr)
 
 	if cfg.Containerd.Log != "" {
 		logrus.Infof("Logging containerd to %s", cfg.Containerd.Log)
-		stdOut = &lumberjack.Logger{
+		fileOut := &lumberjack.Logger{
 			Filename:   cfg.Containerd.Log,
 			MaxSize:    50,
 			MaxBackups: 3,
 			MaxAge:     28,
 			Compress:   true,
 		}
-		stdErr = stdOut
+		// If k3s is started with --debug, write logs to both the log file and stdout/stderr,
+		// even if a log path is set.
+		if cfg.Containerd.Debug {
+			stdOut = io.MultiWriter(stdOut, fileOut)
+			stdErr = io.MultiWriter(stdErr, fileOut)
+		} else {
+			stdOut = fileOut
+			stdErr = fileOut
+		}
 	}
 
 	go func() {
@@ -95,37 +98,11 @@ func Run(ctx context.Context, cfg *config.Node) error {
 		os.Exit(1)
 	}()
 
-	if err := WaitForContainerd(ctx, cfg.Containerd.Address); err != nil {
+	if err := cri.WaitForService(ctx, cfg.Containerd.Address, "containerd"); err != nil {
 		return err
 	}
 
 	return preloadImages(ctx, cfg)
-}
-
-// WaitForContainerd blocks in a retry loop until the Containerd CRI service
-// is functional at the provided socket address. It will return only on success,
-// or when the context is cancelled.
-func WaitForContainerd(ctx context.Context, address string) error {
-	first := true
-	for {
-		conn, err := CriConnection(ctx, address)
-		if err == nil {
-			conn.Close()
-			break
-		}
-		if first {
-			first = false
-		} else {
-			logrus.Infof("Waiting for containerd startup: %v", err)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
-	}
-	logrus.Info("Containerd is now running")
-	return nil
 }
 
 // preloadImages reads the contents of the agent images directory, and attempts to
@@ -145,7 +122,7 @@ func preloadImages(ctx context.Context, cfg *config.Node) error {
 		return nil
 	}
 
-	fileInfos, err := ioutil.ReadDir(cfg.Images)
+	fileInfos, err := os.ReadDir(cfg.Images)
 	if err != nil {
 		logrus.Errorf("Unable to read images in %s: %v", cfg.Images, err)
 		return nil
@@ -157,7 +134,7 @@ func preloadImages(ctx context.Context, cfg *config.Node) error {
 	}
 	defer client.Close()
 
-	criConn, err := CriConnection(ctx, cfg.Containerd.Address)
+	criConn, err := cri.Connection(ctx, cfg.Containerd.Address)
 	if err != nil {
 		return err
 	}

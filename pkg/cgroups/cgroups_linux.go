@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +25,7 @@ func Validate() error {
 }
 
 func validateCgroupsV1() error {
-	cgroups, err := ioutil.ReadFile("/proc/self/cgroup")
+	cgroups, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
 		return err
 	}
@@ -109,6 +108,9 @@ func CheckCgroups() (kubeletRoot, runtimeRoot string, controllers map[string]boo
 				// and thus need to set our kubelet root to something out of the context
 				// of `/user.slice` to ensure that `CPUAccounting` and `MemoryAccounting`
 				// are enabled, as they are generally disabled by default for `user.slice`
+				// Note that we are not setting the `runtimeRoot` as if we are running with
+				// `--docker`, we will inadvertently move the cgroup `dockerd` lives in
+				//  which is not ideal and causes dockerd to become unmanageable by systemd.
 				last := parts[len(parts)-1]
 				i := strings.LastIndex(last, ".scope")
 				if i > 0 {

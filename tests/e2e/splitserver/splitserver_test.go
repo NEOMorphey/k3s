@@ -1,4 +1,4 @@
-package validatecluster
+package splitserver
 
 import (
 	"flag"
@@ -13,11 +13,13 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// Valid nodeOS: generic/ubuntu2004, opensuse/Leap-15.3.x86_64, dweomer/microos.amd64
+// Valid nodeOS: generic/ubuntu2004, opensuse/Leap-15.3.x86_64
 var nodeOS = flag.String("nodeOS", "generic/ubuntu2004", "VM operating system")
 var etcdCount = flag.Int("etcdCount", 1, "number of server nodes only deploying etcd")
 var controlPlaneCount = flag.Int("controlPlaneCount", 1, "number of server nodes acting as control plane")
 var agentCount = flag.Int("agentCount", 1, "number of agent nodes")
+var ci = flag.Bool("ci", false, "running on CI")
+var hardened = flag.Bool("hardened", false, "true or false")
 
 // Environment Variables Info:
 // E2E_RELEASE_VERSION=v1.23.1+k3s2 or nil for latest commit from master
@@ -59,7 +61,8 @@ func createSplitCluster(nodeOS string, etcdCount, controlPlaneCount, agentCount 
 func Test_E2ESplitServer(t *testing.T) {
 	RegisterFailHandler(Fail)
 	flag.Parse()
-	RunSpecs(t, "Split Server Test Suite")
+	suiteConfig, reporterConfig := GinkgoConfiguration()
+	RunSpecs(t, "Split Server Test Suite", suiteConfig, reporterConfig)
 }
 
 var (
@@ -69,12 +72,14 @@ var (
 	agentNodeNames []string
 )
 
-var _ = Describe("Verify Create", func() {
+var _ = ReportAfterEach(e2e.GenReport)
+
+var _ = Describe("Verify Create", Ordered, func() {
 	Context("Cluster :", func() {
 		It("Starts up with no issues", func() {
 			var err error
 			etcdNodeNames, cpNodeNames, agentNodeNames, err = createSplitCluster(*nodeOS, *etcdCount, *controlPlaneCount, *agentCount)
-			Expect(err).NotTo(HaveOccurred(), e2e.GetVagrantLog())
+			Expect(err).NotTo(HaveOccurred(), e2e.GetVagrantLog(err))
 			fmt.Println("CLUSTER CONFIG")
 			fmt.Println("OS:", *nodeOS)
 			fmt.Println("Etcd Server Nodes:", etcdNodeNames)
@@ -92,7 +97,7 @@ var _ = Describe("Verify Create", func() {
 				for _, node := range nodes {
 					g.Expect(node.Status).Should(Equal("Ready"))
 				}
-			}, "420s", "5s").Should(Succeed())
+			}, "620s", "5s").Should(Succeed())
 			_, _ = e2e.ParseNodes(kubeConfigFile, true)
 
 			fmt.Printf("\nFetching Pods status\n")
@@ -106,12 +111,12 @@ var _ = Describe("Verify Create", func() {
 						g.Expect(pod.Status).Should(Equal("Running"), pod.Name)
 					}
 				}
-			}, "420s", "5s").Should(Succeed())
+			}, "620s", "5s").Should(Succeed())
 			_, _ = e2e.ParsePods(kubeConfigFile, true)
 		})
 
 		It("Verifies ClusterIP Service", func() {
-			_, err := e2e.DeployWorkload("clusterip.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("clusterip.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "Cluster IP manifest not deployed")
 
 			cmd := "kubectl get pods -o=name -l k8s-app=nginx-app-clusterip --field-selector=status.phase=Running --kubeconfig=" + kubeConfigFile
@@ -129,7 +134,7 @@ var _ = Describe("Verify Create", func() {
 		})
 
 		It("Verifies NodePort Service", func() {
-			_, err := e2e.DeployWorkload("nodeport.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("nodeport.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "NodePort manifest not deployed")
 
 			for _, nodeName := range cpNodeNames {
@@ -151,7 +156,7 @@ var _ = Describe("Verify Create", func() {
 		})
 
 		It("Verifies LoadBalancer Service", func() {
-			_, err := e2e.DeployWorkload("loadbalancer.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("loadbalancer.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "Loadbalancer manifest not deployed")
 
 			for _, nodeName := range cpNodeNames {
@@ -174,7 +179,7 @@ var _ = Describe("Verify Create", func() {
 		})
 
 		It("Verifies Ingress", func() {
-			_, err := e2e.DeployWorkload("ingress.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("ingress.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "Ingress manifest not deployed")
 
 			for _, nodeName := range cpNodeNames {
@@ -187,7 +192,7 @@ var _ = Describe("Verify Create", func() {
 		})
 
 		It("Verifies Daemonset", func() {
-			_, err := e2e.DeployWorkload("daemonset.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("daemonset.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "Daemonset manifest not deployed")
 
 			Eventually(func(g Gomega) {
@@ -202,7 +207,7 @@ var _ = Describe("Verify Create", func() {
 		})
 
 		It("Verifies dns access", func() {
-			_, err := e2e.DeployWorkload("dnsutils.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("dnsutils.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "dnsutils manifest not deployed")
 
 			cmd := "kubectl get pods dnsutils --kubeconfig=" + kubeConfigFile
@@ -218,13 +223,13 @@ var _ = Describe("Verify Create", func() {
 	})
 })
 
-var failed = false
+var failed bool
 var _ = AfterEach(func() {
-	failed = failed || CurrentGinkgoTestDescription().Failed
+	failed = failed || CurrentSpecReport().Failed()
 })
 
 var _ = AfterSuite(func() {
-	if failed {
+	if failed && !*ci {
 		fmt.Println("FAILED!")
 	} else {
 		Expect(e2e.DestroyCluster()).To(Succeed())

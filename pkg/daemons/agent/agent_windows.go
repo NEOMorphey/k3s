@@ -7,9 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/Microsoft/hcsshim"
 	"github.com/k3s-io/k3s/pkg/daemons/config"
 	"github.com/k3s-io/k3s/pkg/util"
 	"github.com/sirupsen/logrus"
@@ -17,15 +15,9 @@ import (
 	"k8s.io/kubernetes/pkg/kubeapiserver/authorizer/modes"
 )
 
-var NetworkName = "vxlan0"
-
-func checkRuntimeEndpoint(cfg *config.Agent, argsMap map[string]string) {
-	if strings.HasPrefix(cfg.RuntimeSocket, windowsPrefix) {
-		argsMap["container-runtime-endpoint"] = cfg.RuntimeSocket
-	} else {
-		argsMap["container-runtime-endpoint"] = windowsPrefix + cfg.RuntimeSocket
-	}
-}
+const (
+	socketPrefix = "npipe://"
+)
 
 func kubeProxyArgs(cfg *config.Agent) map[string]string {
 	bindAddress := "127.0.0.1"
@@ -41,10 +33,6 @@ func kubeProxyArgs(cfg *config.Agent) map[string]string {
 	}
 	if cfg.NodeName != "" {
 		argsMap["hostname-override"] = cfg.NodeName
-	}
-
-	if sourceVip := waitForManagementIP(NetworkName); sourceVip != "" {
-		argsMap["source-vip"] = sourceVip
 	}
 
 	return argsMap
@@ -85,9 +73,13 @@ func kubeletArgs(cfg *config.Agent) map[string]string {
 		argsMap["resolv-conf"] = cfg.ResolvConf
 	}
 	if cfg.RuntimeSocket != "" {
-		argsMap["containerd"] = cfg.RuntimeSocket
 		argsMap["serialize-image-pulls"] = "false"
-		checkRuntimeEndpoint(cfg, argsMap)
+		// cadvisor wants the containerd CRI socket without the prefix, but kubelet wants it with the prefix
+		if strings.HasPrefix(cfg.RuntimeSocket, socketPrefix) {
+			argsMap["container-runtime-endpoint"] = cfg.RuntimeSocket
+		} else {
+			argsMap["container-runtime-endpoint"] = socketPrefix + cfg.RuntimeSocket
+		}
 	}
 	if cfg.PauseImage != "" {
 		argsMap["pod-infra-container-image"] = cfg.PauseImage
@@ -131,19 +123,4 @@ func kubeletArgs(cfg *config.Agent) map[string]string {
 		argsMap["protect-kernel-defaults"] = "true"
 	}
 	return argsMap
-}
-
-func waitForManagementIP(networkName string) string {
-	for range time.Tick(time.Second * 5) {
-		network, err := hcsshim.GetHNSNetworkByName(networkName)
-		if err != nil {
-			logrus.WithError(err).Warning("can't find HNS network, retrying", networkName)
-			continue
-		}
-		if network.ManagementIP == "" {
-			continue
-		}
-		return network.ManagementIP
-	}
-	return ""
 }

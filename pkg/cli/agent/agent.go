@@ -1,16 +1,18 @@
 package agent
 
 import (
+	"crypto/tls"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"github.com/erikdubbelboer/gspt"
 	"github.com/k3s-io/k3s/pkg/agent"
 	"github.com/k3s-io/k3s/pkg/cli/cmds"
 	"github.com/k3s-io/k3s/pkg/datadir"
-	"github.com/k3s-io/k3s/pkg/netutil"
 	"github.com/k3s-io/k3s/pkg/token"
+	"github.com/k3s-io/k3s/pkg/util"
 	"github.com/k3s-io/k3s/pkg/version"
 	"github.com/rancher/wrangler/pkg/signals"
 	"github.com/sirupsen/logrus"
@@ -33,8 +35,8 @@ func Run(ctx *cli.Context) error {
 		return err
 	}
 
-	if os.Getuid() != 0 && runtime.GOOS != "windows" {
-		return fmt.Errorf("agent must be ran as root")
+	if runtime.GOOS != "windows" && os.Getuid() != 0 && !cmds.AgentConfig.Rootless {
+		return fmt.Errorf("agent must be run as root, or with --rootless")
 	}
 
 	if cmds.AgentConfig.TokenFile != "" {
@@ -45,12 +47,11 @@ func Run(ctx *cli.Context) error {
 		cmds.AgentConfig.Token = token
 	}
 
-	if cmds.AgentConfig.Token == "" && cmds.AgentConfig.ClusterSecret != "" {
-		logrus.Warn("cluster-secret is deprecated, it will be removed in v1.25. Use --token instead.")
-		cmds.AgentConfig.Token = cmds.AgentConfig.ClusterSecret
-	}
+	clientKubeletCert := filepath.Join(cmds.AgentConfig.DataDir, "agent", "client-kubelet.crt")
+	clientKubeletKey := filepath.Join(cmds.AgentConfig.DataDir, "agent", "client-kubelet.key")
+	_, err := tls.LoadX509KeyPair(clientKubeletCert, clientKubeletKey)
 
-	if cmds.AgentConfig.Token == "" {
+	if err != nil && cmds.AgentConfig.Token == "" {
 		return fmt.Errorf("--token is required")
 	}
 
@@ -59,7 +60,7 @@ func Run(ctx *cli.Context) error {
 	}
 
 	if cmds.AgentConfig.FlannelIface != "" && len(cmds.AgentConfig.NodeIP) == 0 {
-		cmds.AgentConfig.NodeIP.Set(netutil.GetIPFromInterface(cmds.AgentConfig.FlannelIface))
+		cmds.AgentConfig.NodeIP.Set(util.GetIPFromInterface(cmds.AgentConfig.FlannelIface))
 	}
 
 	logrus.Info("Starting " + version.Program + " agent " + ctx.App.Version)
@@ -74,6 +75,8 @@ func Run(ctx *cli.Context) error {
 	cfg.DataDir = dataDir
 
 	contextCtx := signals.SetupSignalContext()
+
+	go cmds.WriteCoverage(contextCtx)
 
 	return agent.Run(contextCtx, cfg)
 }

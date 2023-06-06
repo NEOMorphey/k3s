@@ -60,18 +60,13 @@ func commandSetup(app *cli.Context, cfg *cmds.Server, sc *server.Config) error {
 	sc.ControlConfig.EtcdS3Folder = cfg.EtcdS3Folder
 	sc.ControlConfig.EtcdS3Insecure = cfg.EtcdS3Insecure
 	sc.ControlConfig.EtcdS3Timeout = cfg.EtcdS3Timeout
-	sc.ControlConfig.Runtime = &config.ControlRuntime{}
+	sc.ControlConfig.Runtime = config.NewRuntime(nil)
 	sc.ControlConfig.Runtime.ETCDServerCA = filepath.Join(dataDir, "tls", "etcd", "server-ca.crt")
 	sc.ControlConfig.Runtime.ClientETCDCert = filepath.Join(dataDir, "tls", "etcd", "client.crt")
 	sc.ControlConfig.Runtime.ClientETCDKey = filepath.Join(dataDir, "tls", "etcd", "client.key")
-	sc.ControlConfig.Runtime.KubeConfigAdmin = filepath.Join(dataDir, "cred", "admin.kubeconfig")
+	sc.ControlConfig.Runtime.KubeConfigSupervisor = filepath.Join(dataDir, "cred", "supervisor.kubeconfig")
 
 	return nil
-}
-
-// Run is an alias for Save, retained for compatibility reasons.
-func Run(app *cli.Context) error {
-	return Save(app)
 }
 
 // Save triggers an on-demand etcd snapshot operation
@@ -115,7 +110,7 @@ func save(app *cli.Context, cfg *cmds.Server) error {
 		return err
 	}
 
-	sc, err := server.NewContext(ctx, serverConfig.ControlConfig.Runtime.KubeConfigAdmin)
+	sc, err := server.NewContext(ctx, serverConfig.ControlConfig.Runtime.KubeConfigSupervisor)
 	if err != nil {
 		return err
 	}
@@ -149,7 +144,7 @@ func delete(app *cli.Context, cfg *cmds.Server) error {
 		return err
 	}
 
-	sc, err := server.NewContext(ctx, serverConfig.ControlConfig.Runtime.KubeConfigAdmin)
+	sc, err := server.NewContext(ctx, serverConfig.ControlConfig.Runtime.KubeConfigSupervisor)
 	if err != nil {
 		return err
 	}
@@ -255,7 +250,7 @@ func prune(app *cli.Context, cfg *cmds.Server) error {
 		return err
 	}
 
-	sc, err := server.NewContext(ctx, serverConfig.ControlConfig.Runtime.KubeConfigAdmin)
+	sc, err := server.NewContext(ctx, serverConfig.ControlConfig.Runtime.KubeConfigSupervisor)
 	if err != nil {
 		return err
 	}

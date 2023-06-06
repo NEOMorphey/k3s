@@ -12,12 +12,19 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// Valid nodeOS: generic/ubuntu2004, opensuse/Leap-15.3.x86_64, dweomer/microos.amd64
+// Valid nodeOS:
+// generic/ubuntu2004, generic/centos7, generic/rocky8
+// opensuse/Leap-15.3.x86_64
 var nodeOS = flag.String("nodeOS", "generic/ubuntu2004", "VM operating system")
 var serverCount = flag.Int("serverCount", 3, "number of server nodes")
 var agentCount = flag.Int("agentCount", 2, "number of agent nodes")
+var hardened = flag.Bool("hardened", false, "true or false")
+var ci = flag.Bool("ci", false, "running on CI")
+var local = flag.Bool("local", false, "Controls which version k3s upgrades too, local binary or latest commit on master")
 
 // Environment Variables Info:
+// E2E_REGISTRY: true/false (default: false)
+// Controls which K3s version is installed first
 // E2E_RELEASE_VERSION=v1.23.3+k3s1
 // OR
 // E2E_RELEASE_CHANNEL=(commit|latest|stable), commit pulls latest commit from master
@@ -25,7 +32,8 @@ var agentCount = flag.Int("agentCount", 2, "number of agent nodes")
 func Test_E2EUpgradeValidation(t *testing.T) {
 	RegisterFailHandler(Fail)
 	flag.Parse()
-	RunSpecs(t, "Create Cluster Test Suite")
+	suiteConfig, reporterConfig := GinkgoConfiguration()
+	RunSpecs(t, "Upgrade Cluster Test Suite", suiteConfig, reporterConfig)
 }
 
 var (
@@ -34,12 +42,14 @@ var (
 	agentNodeNames  []string
 )
 
-var _ = Describe("Verify Upgrade", func() {
+var _ = ReportAfterEach(e2e.GenReport)
+
+var _ = Describe("Verify Upgrade", Ordered, func() {
 	Context("Cluster :", func() {
 		It("Starts up with no issues", func() {
 			var err error
 			serverNodeNames, agentNodeNames, err = e2e.CreateCluster(*nodeOS, *serverCount, *agentCount)
-			Expect(err).NotTo(HaveOccurred(), e2e.GetVagrantLog())
+			Expect(err).NotTo(HaveOccurred(), e2e.GetVagrantLog(err))
 			fmt.Println("CLUSTER CONFIG")
 			fmt.Println("OS:", *nodeOS)
 			fmt.Println("Server Nodes:", serverNodeNames)
@@ -56,7 +66,7 @@ var _ = Describe("Verify Upgrade", func() {
 				for _, node := range nodes {
 					g.Expect(node.Status).Should(Equal("Ready"))
 				}
-			}, "420s", "5s").Should(Succeed())
+			}, "620s", "5s").Should(Succeed())
 			_, _ = e2e.ParseNodes(kubeConfigFile, true)
 
 			fmt.Printf("\nFetching Pods status\n")
@@ -70,12 +80,12 @@ var _ = Describe("Verify Upgrade", func() {
 						g.Expect(pod.Status).Should(Equal("Running"), pod.Name)
 					}
 				}
-			}, "420s", "5s").Should(Succeed())
+			}, "620s", "5s").Should(Succeed())
 			_, _ = e2e.ParsePods(kubeConfigFile, true)
 		})
 
 		It("Verifies ClusterIP Service", func() {
-			_, err := e2e.DeployWorkload("clusterip.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("clusterip.yaml", kubeConfigFile, *hardened)
 
 			Expect(err).NotTo(HaveOccurred(), "Cluster IP manifest not deployed")
 
@@ -94,7 +104,7 @@ var _ = Describe("Verify Upgrade", func() {
 		})
 
 		It("Verifies NodePort Service", func() {
-			_, err := e2e.DeployWorkload("nodeport.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("nodeport.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "NodePort manifest not deployed")
 
 			for _, nodeName := range serverNodeNames {
@@ -117,7 +127,7 @@ var _ = Describe("Verify Upgrade", func() {
 		})
 
 		It("Verifies LoadBalancer Service", func() {
-			_, err := e2e.DeployWorkload("loadbalancer.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("loadbalancer.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "Loadbalancer manifest not deployed")
 			for _, nodeName := range serverNodeNames {
 				ip, _ := e2e.FetchNodeExternalIP(nodeName)
@@ -138,7 +148,7 @@ var _ = Describe("Verify Upgrade", func() {
 		})
 
 		It("Verifies Ingress", func() {
-			_, err := e2e.DeployWorkload("ingress.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("ingress.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "Ingress manifest not deployed")
 
 			for _, nodeName := range serverNodeNames {
@@ -151,13 +161,13 @@ var _ = Describe("Verify Upgrade", func() {
 		})
 
 		It("Verifies Daemonset", func() {
-			_, err := e2e.DeployWorkload("daemonset.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("daemonset.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "Daemonset manifest not deployed")
 
 			nodes, _ := e2e.ParseNodes(kubeConfigFile, false) //nodes :=
-			pods, _ := e2e.ParsePods(kubeConfigFile, false)
 
 			Eventually(func(g Gomega) {
+				pods, _ := e2e.ParsePods(kubeConfigFile, false)
 				count := e2e.CountOfStringInSlice("test-daemonset", pods)
 				fmt.Println("POD COUNT")
 				fmt.Println(count)
@@ -168,7 +178,7 @@ var _ = Describe("Verify Upgrade", func() {
 		})
 
 		It("Verifies dns access", func() {
-			_, err := e2e.DeployWorkload("dnsutils.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("dnsutils.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "dnsutils manifest not deployed")
 
 			Eventually(func() (string, error) {
@@ -183,7 +193,7 @@ var _ = Describe("Verify Upgrade", func() {
 		})
 
 		It("Verifies Local Path Provisioner storage ", func() {
-			_, err := e2e.DeployWorkload("local-path-provisioner.yaml", kubeConfigFile, false)
+			_, err := e2e.DeployWorkload("local-path-provisioner.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "local-path-provisioner manifest not deployed")
 			Eventually(func(g Gomega) {
 				cmd := "kubectl get pvc local-path-pvc --kubeconfig=" + kubeConfigFile
@@ -214,7 +224,7 @@ var _ = Describe("Verify Upgrade", func() {
 			Expect(err).NotTo(HaveOccurred())
 			fmt.Println(res)
 
-			_, err = e2e.DeployWorkload("local-path-provisioner.yaml", kubeConfigFile, false)
+			_, err = e2e.DeployWorkload("local-path-provisioner.yaml", kubeConfigFile, *hardened)
 			Expect(err).NotTo(HaveOccurred(), "local-path-provisioner manifest not deployed")
 
 			Eventually(func() (string, error) {
@@ -233,16 +243,15 @@ var _ = Describe("Verify Upgrade", func() {
 
 			// Check data after re-creation
 			Eventually(func() (string, error) {
-				cmd = "kubectl exec volume-test cat /data/test --kubeconfig=" + kubeConfigFile
+				cmd := "kubectl exec volume-test --kubeconfig=" + kubeConfigFile + " -- cat /data/test"
 				return e2e.RunCommand(cmd)
 			}, "180s", "2s").Should(ContainSubstring("local-path-test"))
 		})
 
 		It("Upgrades with no issues", func() {
 			var err error
-			err = e2e.UpgradeCluster(serverNodeNames, agentNodeNames)
-			fmt.Println(err)
-			Expect(err).NotTo(HaveOccurred())
+			Expect(e2e.UpgradeCluster(append(serverNodeNames, agentNodeNames...), *local)).To(Succeed())
+			Expect(e2e.RestartCluster(append(serverNodeNames, agentNodeNames...))).To(Succeed())
 			fmt.Println("CLUSTER UPGRADED")
 			kubeConfigFile, err = e2e.GenKubeConfigFile(serverNodeNames[0])
 			Expect(err).NotTo(HaveOccurred())
@@ -343,9 +352,9 @@ var _ = Describe("Verify Upgrade", func() {
 
 		It("After upgrade verifies Daemonset", func() {
 			nodes, _ := e2e.ParseNodes(kubeConfigFile, false) //nodes :=
-			pods, _ := e2e.ParsePods(kubeConfigFile, false)
 
 			Eventually(func(g Gomega) {
+				pods, _ := e2e.ParsePods(kubeConfigFile, false)
 				count := e2e.CountOfStringInSlice("test-daemonset", pods)
 				fmt.Println("POD COUNT")
 				fmt.Println(count)
@@ -363,20 +372,23 @@ var _ = Describe("Verify Upgrade", func() {
 
 		It("After upgrade verify Local Path Provisioner storage ", func() {
 			Eventually(func() (string, error) {
-				cmd := "kubectl exec volume-test cat /data/test --kubeconfig=" + kubeConfigFile
+				cmd := "kubectl exec volume-test --kubeconfig=" + kubeConfigFile + " -- cat /data/test"
 				return e2e.RunCommand(cmd)
 			}, "180s", "2s").Should(ContainSubstring("local-path-test"))
 		})
 	})
 })
 
-var failed = false
+var failed bool
 var _ = AfterEach(func() {
-	failed = failed || CurrentGinkgoTestDescription().Failed
+	failed = failed || CurrentSpecReport().Failed()
 })
 
 var _ = AfterSuite(func() {
-	if failed {
+	if os.Getenv("E2E_GOCOVER") != "" {
+		Expect(e2e.GetCoverageReport(append(serverNodeNames, agentNodeNames...))).To(Succeed())
+	}
+	if failed && !*ci {
 		fmt.Println("FAILED!")
 	} else {
 		Expect(e2e.DestroyCluster()).To(Succeed())
